@@ -451,6 +451,25 @@
             </div>
         </div>
 
+        <h4 style="margin-top: 1.5rem; color: var(--secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;"><i data-lucide="timer"></i> Aging Summary (On-going)</h4>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+            <div class="card stat-card" style="border-left: 4px solid var(--success);">
+                <i data-lucide="clock" style="color: var(--success);"></i>
+                <p>< 30 Mins</p>
+                <h3 id="dash-aging-low">0</h3>
+            </div>
+            <div class="card stat-card" style="border-left: 4px solid #f59e0b;">
+                <i data-lucide="clock" style="color: #f59e0b;"></i>
+                <p>30 - 60 Mins</p>
+                <h3 id="dash-aging-med">0</h3>
+            </div>
+            <div class="card stat-card" style="border-left: 4px solid var(--danger);">
+                <i data-lucide="alert-triangle" style="color: var(--danger);"></i>
+                <p>> 60 Mins</p>
+                <h3 id="dash-aging-high">0</h3>
+            </div>
+        </div>
+
         <h2 style="margin-top: 2rem;"><i data-lucide="layers"></i> Validation Status Monitor</h2>
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: 1rem;">
             <div class="sub-nav" style="margin-bottom: 0;">
@@ -786,6 +805,10 @@
     let icRemarksMaster = JSON.parse(localStorage.getItem('icRemarksMaster')) || ["Verified", "Discrepancy Found", "Quantity Match"];
     let dispoRemarksMaster = JSON.parse(localStorage.getItem('dispoRemarksMaster')) || ["Release", "Hold", "Reject", "Partial Release"];
     
+    // Alert State
+    let alertedHighAgingIds = new Set();
+    const alertSound = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+
     // Pagination State
     let currentPage = 1;
     let userCurrentPage = 1;
@@ -1865,6 +1888,34 @@
             (d.icStatus || 'Pending').toLowerCase() === activeDashboardTab.toLowerCase()
         );
 
+        const nowTimeStr = new Date().getHours().toString().padStart(2, '0') + ':' + new Date().getMinutes().toString().padStart(2, '0');
+        
+        // Calculate Aging Summary for all on-going items
+        let agingLow = 0, agingMed = 0, agingHigh = 0;
+        const allOngoing = dateFilteredData.filter(d => (d.icStatus || '').toLowerCase() === 'on-going');
+        allOngoing.forEach(item => {
+            if (item.timeICStatus) {
+                const diff = calculateDurationMinutes(item.timeICStatus, nowTimeStr);
+                if (diff !== null) {
+                    if (diff <= 30) agingLow++;
+                    else if (diff <= 60) agingMed++;
+                    else {
+                        agingHigh++;
+                        // Sound alert logic for high aging items
+                        if (!alertedHighAgingIds.has(item.id)) {
+                            alertSound.play().catch(() => {});
+                            alertedHighAgingIds.add(item.id);
+                            showToast(`High Aging Alert: SKU ${item.sku} has exceeded 60 minutes!`, "danger");
+                        }
+                    }
+                }
+            }
+        });
+
+        document.getElementById('dash-aging-low').innerText = agingLow;
+        document.getElementById('dash-aging-med').innerText = agingMed;
+        document.getElementById('dash-aging-high').innerText = agingHigh;
+
         // Search Filter for Monitor
         if (dashboardSearchTerm) {
             const term = dashboardSearchTerm.toLowerCase();
@@ -1874,15 +1925,11 @@
             );
         }
 
-        // Sort to keep 'OP' Platform as Priority 1 (at the top)
-        const nowTimeStr = new Date().getHours().toString().padStart(2, '0') + ':' + new Date().getMinutes().toString().padStart(2, '0');
-
-        // Sort to keep 'OP' Platform as Priority 1, then sort by aging duration (descending)
+        // Sort to keep 'OP' Platform as Priority 1, then by aging duration (descending)
         filteredMonitorItems.sort((a, b) => {
             const isA_OP = (a.platform || '').toUpperCase() === 'OP';
             const isB_OP = (b.platform || '').toUpperCase() === 'OP';
-            return isA_OP === isB_OP ? 0 : isA_OP ? -1 : 1;
-            
+
             if (isA_OP !== isB_OP) return isA_OP ? -1 : 1;
 
             if (activeDashboardTab === 'On-going') {
@@ -2023,10 +2070,13 @@
         updateDatalists();
         lucide.createIcons();
 
-        // Auto-refresh for live duration tracking in Data view
+        // Auto-refresh for live duration tracking and dashboard alerts
         setInterval(() => {
             const dataView = document.getElementById('view-data');
             if (dataView && dataView.classList.contains('active')) renderValidationTable();
+
+            const dashView = document.getElementById('view-dashboard');
+            if (dashView && dashView.classList.contains('active')) updateDashboard();
         }, 30000); // Refresh every 30 seconds
     };
 </script>
