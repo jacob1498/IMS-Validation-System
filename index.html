@@ -396,7 +396,10 @@
             <label style="font-size: 0.75rem; font-weight: bold; color: var(--secondary);">To</label>
             <input type="date" id="global-end" onchange="refreshAllViews()" style="padding: 0.3rem; font-size: 0.85rem; width: auto;">
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="resetGlobalFilter()" style="margin-left: auto;"><i data-lucide="refresh-cw"></i> Reset Filter</button>
+        <div class="btn-group" style="margin-left: auto;">
+            <button class="btn btn-secondary btn-sm" onclick="resetGlobalFilter()"><i data-lucide="refresh-cw"></i> Reset to Today</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearGlobalFilter()"><i data-lucide="filter-x"></i> Clear Filter</button>
+        </div>
     </div>
 
     <!-- Dashboard View -->
@@ -850,6 +853,43 @@
         }, 3000);
     }
 
+    // Helper to normalize dates to YYYY-MM-DD for reliable filtering
+    function normalizeDate(dateStr) {
+        if (!dateStr) return '';
+        // Take only the date part in case there's a timestamp, then trim
+        let clean = dateStr.toString().split(' ')[0].trim().replace(/['"]/g, '');
+        if (clean === '-' || clean === '') return '';
+        
+        // If already YYYY-MM-DD, return as is
+        if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
+        
+        const parts = clean.split(/[\/\-\.]/);
+        if (parts.length === 3) {
+            let year, month, day;
+            const p0 = parts[0].trim();
+            const p1 = parts[1].trim();
+            const p2 = parts[2].trim();
+
+            if (p2.length === 4) { // Format: XX/XX/YYYY
+                year = p2;
+                // Guessing Month vs Day: If first part > 12, it must be Day (DD/MM/YYYY)
+                if (parseInt(p0) > 12) {
+                    day = p0; month = p1;
+                } else {
+                    month = p0; day = p1;
+                }
+            } else if (p0.length === 4) { // Format: YYYY/XX/XX
+                year = p0; month = p1; day = p2;
+            } else if (p2.length === 2) { // Format: XX/XX/YY
+                year = (parseInt(p2) > 50 ? "19" : "20") + p2;
+                if (parseInt(p0) > 12) { day = p0; month = p1; }
+                else { month = p0; day = p1; }
+            }
+            if (year && month && day) return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+        }
+        return clean;
+    }
+
     // Helper for time calculation
     function calculateDurationMinutes(startTime, endTime) {
         if (!startTime || !endTime) return null;
@@ -873,12 +913,35 @@
 
     // Global Filtering Logic
     function refreshAllViews() {
+        currentPage = 1;
+        dataCurrentPage = 1;
         updateDashboard();
         renderLogs();
         renderValidationTable();
     }
 
+    function setDefaultGlobalDates() {
+        const today = new Date();
+        const tomorrow = new Date();
+        tomorrow.setDate(today.getDate() + 1);
+        
+        const formatDate = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        };
+
+        document.getElementById('global-start').value = formatDate(today);
+        document.getElementById('global-end').value = formatDate(tomorrow);
+    }
+
     function resetGlobalFilter() {
+        setDefaultGlobalDates();
+        refreshAllViews();
+    }
+
+    function clearGlobalFilter() {
         document.getElementById('global-start').value = '';
         document.getElementById('global-end').value = '';
         refreshAllViews();
@@ -1197,9 +1260,10 @@
 
         if (globalStart || globalEnd) {
             filteredData = filteredData.filter(d => {
-                if (!d.dateInput) return false;
-                if (globalStart && d.dateInput < globalStart) return false;
-                if (globalEnd && d.dateInput > globalEnd) return false;
+                const entryDate = normalizeDate(d.dateInput);
+                if (!entryDate) return false;
+                if (globalStart && entryDate < globalStart) return false;
+                if (globalEnd && entryDate > globalEnd) return false;
                 return true;
             });
         }
@@ -1212,6 +1276,23 @@
                 (d.sku && d.sku.toLowerCase().includes(term)) ||
                 (d.desc && d.desc.toLowerCase().includes(term))
             );
+        }
+
+        if (validationData.length > 0 && filteredData.length === 0 && (globalStart || globalEnd)) {
+            tbody.innerHTML = `<tr><td colspan="20" style="text-align:center; padding: 3rem; color: var(--secondary);">
+                <i data-lucide="filter-x" style="width:48px; height:48px; margin-bottom:1rem; opacity:0.5;"></i><br>
+                <strong>Data is hidden by the Date Filter.</strong><br>
+                There are ${validationData.length} total records, but none match the range ${globalStart} to ${globalEnd}.<br>
+                <button class="btn btn-secondary btn-sm" style="margin-top:1rem" onclick="clearGlobalFilter()">Show All Records</button></td></tr>`;
+            lucide.createIcons();
+            return;
+        }
+
+        if (filteredData.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="20" style="text-align:center; padding: 2rem; color: var(--secondary);">
+                <i data-lucide="database-zap"></i> No validation records found. Click "Import CSV" to add data.</td></tr>`;
+            lucide.createIcons();
+            return;
         }
 
         const totalPages = Math.ceil(filteredData.length / dataRowsPerPage) || 1;
@@ -1492,25 +1573,25 @@
                 }
                 cols.push(current.trim().replace(/^"|"$/g, ''));
 
-                if (cols.length >= 18) {
+                if (cols.length >= 7) { // Minimum required columns to be useful
                     newEntries.push({
                         id: now + i,
-                        dateInput: cols[0],
+                        dateInput: normalizeDate(cols[0]),
                         timeInput: cols[1],
-                        orderDate: cols[2],
+                        orderDate: normalizeDate(cols[2]),
                         orderNum: cols[3],
                         platform: cols[4],
                         sku: cols[5],
                         desc: cols[6],
-                        orderQty: cols[7],
-                        rejQty: cols[8],
-                        replenRem: cols[9],
-                        icStatus: cols[10],
-                        timeICStatus: cols[11],
-                        icRem: cols[12],
-                        timeICRem: cols[13],
-                        validator: cols[16],
-                        disposition: cols[17]
+                        orderQty: cols[7] || 0,
+                        rejQty: cols[8] || 0,
+                        replenRem: cols[9] || '',
+                        icStatus: cols[10] || 'Pending',
+                        timeICStatus: cols[11] || '',
+                        icRem: cols[12] || '',
+                        timeICRem: cols[13] || '',
+                        validator: cols[16] || '',
+                        disposition: cols[17] || ''
                     });
                 }
             }
@@ -1870,9 +1951,10 @@
         let dateFilteredData = [...validationData];
         if (globalStart || globalEnd) {
             dateFilteredData = dateFilteredData.filter(d => {
-                if (!d.dateInput) return false;
-                if (globalStart && d.dateInput < globalStart) return false;
-                if (globalEnd && d.dateInput > globalEnd) return false;
+                const entryDate = normalizeDate(d.dateInput);
+                if (!entryDate) return false;
+                if (globalStart && entryDate < globalStart) return false;
+                if (globalEnd && entryDate > globalEnd) return false;
                 return true;
             });
         }
@@ -2019,9 +2101,6 @@
                 if (endTime && t > endTime) return false;
                 return true;
             });
-        } else {
-            const todayStr = new Date().toLocaleDateString();
-            todayLogs = logs.filter(l => new Date(l.timestamp).toLocaleDateString() === todayStr);
         }
 
         const userStatus = {};
@@ -2065,6 +2144,7 @@
 
     // Initial Load
     window.onload = () => {
+        setDefaultGlobalDates();
         updateDashboard();
         renderUserTable();
         updateDatalists();
